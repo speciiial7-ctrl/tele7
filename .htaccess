@@ -1,2 +1,2 @@
 RewriteEngine On
-RewriteRule ^ply\.m3u8$ ply.m3u8.php [L,QSA]
+RewriteRule ^ply\.m3u8$ ply.m3u8.js [L,QSA]

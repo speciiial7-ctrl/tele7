@@ -1,1 +1,223 @@
-hi
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Live Stream Player</title>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.11/dist/hls.min.js" defer></script>
+
+<style>
+  :root{
+    --bg:#0f1720;
+    --card:#0b1220;
+    --muted:#9aa6b2;
+    --accent:#2dd4bf;
+    --glass: rgba(255,255,255,0.03);
+    --radius:10px;
+    --gap:12px;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial;}
+  body{background:linear-gradient(180deg,#071022,#0b1220);color:#e6eef6;padding:16px;box-sizing:border-box;}
+  h1{margin:0;font-size:20px}
+  input,select,button{
+    background:var(--glass);
+    border:1px solid rgba(255,255,255,0.08);
+    color:#e6eef6;
+    padding:8px 10px;
+    border-radius:8px;
+    font-size:14px;
+  }
+  button{cursor:pointer;background:var(--accent);color:#042023;font-weight:700}
+  .config{
+    display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;
+  }
+  .config input{flex:1;min-width:100px;}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+  input[type="search"],select{background:var(--glass)}
+  .layout{display:grid;gap:var(--gap);}
+  @media(min-width:900px){.layout{grid-template-columns:360px 1fr;align-items:start}}
+  .player-wrap{
+    background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);
+    border-radius:var(--radius);padding:12px;border:1px solid rgba(255,255,255,0.03);
+  }
+  video{width:100%;height:210px;background:#000;border-radius:8px;display:block}
+  .player-meta{display:flex;gap:10px;align-items:center;margin-top:10px}
+  .player-meta img{width:56px;height:40px;object-fit:cover;border-radius:6px}
+  .player-title{font-weight:600}
+  .player-sub{color:var(--muted);font-size:13px}
+  .channels{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);
+    padding:8px;border-radius:10px;display:flex;gap:8px;align-items:center;
+    cursor:pointer;transition:transform .12s ease; border:1px solid rgba(255,255,255,0.02)}
+  .card:hover{transform:translateY(-4px)}
+  .thumb{width:70px;height:50px;flex:0 0 70px;border-radius:6px;object-fit:cover;background:#0b1220}
+  .meta{flex:1;min-width:0}
+  .meta .name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meta .cat{font-size:12px;color:var(--muted);margin-top:4px}
+  .play-btn{background:var(--accent);color:#042023;padding:6px 8px;border-radius:8px;font-weight:700;border:none;cursor:pointer}
+  .message{font-size:13px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+
+<h1>📺 Live Stream Player</h1>
+
+<!-- Credentials -->
+<div class="config">
+  <input id="host" placeholder="Host (e.g. front-main.eagle-4k.me)">
+  <input id="username" placeholder="Username">
+  <input id="password" placeholder="Password" type="password">
+  <button id="loadBtn">Load</button>
+</div>
+
+<!-- Search and category filters -->
+<div class="controls">
+  <input id="search" type="search" placeholder="Search channels...">
+  <select id="catFilter">
+    <option value="">All categories</option>
+  </select>
+</div>
+
+<main class="layout">
+  <section class="player-wrap">
+    <video id="player" controls playsinline webkit-playsinline preload="none"></video>
+    <div class="player-meta">
+      <img id="playerIcon" src="" alt="">
+      <div>
+        <div id="playerTitle" class="player-title">No channel selected</div>
+        <div id="playerSub" class="player-sub"></div>
+      </div>
+    </div>
+    <div id="notes" class="message"></div>
+  </section>
+  <section>
+    <div id="channels" class="channels"></div>
+  </section>
+</main>
+
+<script>
+const playerProxyBase = "/ply.m3u8?url=";
+
+const hostEl = document.getElementById("host");
+const userEl = document.getElementById("username");
+const passEl = document.getElementById("password");
+const loadBtn = document.getElementById("loadBtn");
+const searchEl = document.getElementById("search");
+const catEl = document.getElementById("catFilter");
+const channelsEl = document.getElementById("channels");
+const notesEl = document.getElementById("notes");
+const player = document.getElementById("player");
+const pTitle = document.getElementById("playerTitle");
+const pSub = document.getElementById("playerSub");
+const pIcon = document.getElementById("playerIcon");
+
+let allChannels = [];
+let hls = null;
+
+// Restore saved credentials
+["host","username","password"].forEach(k=>{
+  const v = localStorage.getItem("iptv_"+k);
+  if(v) document.getElementById(k).value = v;
+});
+
+loadBtn.onclick = () => {
+  const host = hostEl.value.trim();
+  const user = userEl.value.trim();
+  const pass = passEl.value.trim();
+  if(!host || !user || !pass) {
+    alert("Enter all credentials first");
+    return;
+  }
+  localStorage.setItem("iptv_host",host);
+  localStorage.setItem("iptv_username",user);
+  localStorage.setItem("iptv_password",pass);
+  loadChannels(host,user,pass);
+};
+
+async function loadChannels(host,user,pass){
+  const url = `http://${host}/player_api.php?action=get_live_streams&username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}`;
+  notesEl.textContent = "Loading channels...";
+  channelsEl.innerHTML = "";
+  try{
+    const res = await fetch(url,{cache:"no-store"});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const data = await res.json();
+    if(!Array.isArray(data)) throw new Error("Invalid response");
+    allChannels = data;
+    renderCategories();
+    renderChannels(data);
+    notesEl.textContent = `Loaded ${data.length} channels.`;
+  }catch(e){
+    console.error(e);
+    notesEl.textContent = "Failed to load: " + e.message + " (maybe CORS blocked)";
+  }
+}
+
+function renderCategories(){
+  const cats = [...new Set(allChannels.map(c=>c.category_id||""))];
+  catEl.innerHTML = `<option value="">All categories</option>`;
+  cats.forEach(id=>{
+    const opt=document.createElement("option");
+    opt.value=id; opt.textContent=id?`Category ${id}`:"Uncategorized";
+    catEl.appendChild(opt);
+  });
+}
+
+function renderChannels(list){
+  channelsEl.innerHTML="";
+  if(!list.length){channelsEl.textContent="No channels.";return;}
+  for(const c of list){
+    const div=document.createElement("div");
+    div.className="card";
+    const img=document.createElement("img");
+    img.src=c.stream_icon||""; img.className="thumb";
+    const meta=document.createElement("div");meta.className="meta";
+    meta.innerHTML=`<div class=name>${c.name||"Unnamed"}</div>
+                    <div class=cat>ID ${c.stream_id}</div>`;
+    div.append(img,meta);
+    div.onclick=()=>play(c);
+    channelsEl.appendChild(div);
+  }
+}
+
+function applyFilters(){
+  const q=searchEl.value.toLowerCase();
+  const cat=catEl.value;
+  const filtered=allChannels.filter(c=>{
+    if(cat && String(c.category_id||"")!==cat) return false;
+    if(q && !(`${c.name}`.toLowerCase().includes(q))) return false;
+    return true;
+  });
+  renderChannels(filtered);
+}
+
+searchEl.oninput = applyFilters;
+catEl.onchange = applyFilters;
+
+function buildUrl(host,user,pass,id){
+  const inner=`http://${host}/live/${user}/${pass}/${id}.ts`;
+  return playerProxyBase+encodeURIComponent(inner);
+}
+
+function play(ch){
+  const host=hostEl.value.trim(), user=userEl.value.trim(), pass=passEl.value.trim();
+  const url=buildUrl(host,user,pass,ch.stream_id);
+  pTitle.textContent=ch.name;
+  pSub.textContent=`ID ${ch.stream_id}`;
+  pIcon.src=ch.stream_icon||"";
+  if(hls){hls.destroy();hls=null;}
+  if(player.canPlayType('application/vnd.apple.mpegurl')){
+    player.src=url; player.play();
+  } else if(window.Hls){
+    hls=new Hls();
+    hls.loadSource(url);
+    hls.attachMedia(player);
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>player.play());
+  } else {
+    player.src=url; player.play();
+  }
+}
+</script>
+</body>
+</html>
